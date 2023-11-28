@@ -6,18 +6,20 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/go-redis/redis"
+	"github.com/gocolly/colly"
 	"github.com/izaakdale/vancouver-conditions-backend/pkg/api"
 )
 
 func main() {
-	chronOpts, err := redis.ParseURL(os.Getenv("REDIS_URL"))
+	opts, err := redis.ParseURL(os.Getenv("REDIS_URL"))
 	if err != nil {
 		log.Printf("error trying to connect to redis\n")
 		return
 	}
-	chronCli := redis.NewClient(chronOpts)
+	cli := redis.NewClient(opts)
 
 	weatherApiEndpoint := os.Getenv("WEATHER_API_ENDPOINT")
 	apiKey := os.Getenv("WEATHER_API_KEY")
@@ -54,6 +56,8 @@ func main() {
 		fb.Title = a.title
 		fb.GoogleMapsUrl = a.googleMapsUrl
 
+		fb.Snowfall.Next1Days, fb.Snowfall.Next3Days, fb.Snowfall.Next7Days = scrape(a.forecastUrl)
+
 		rec.Data = append(rec.Data, fb)
 	}
 
@@ -63,7 +67,7 @@ func main() {
 		return
 	}
 
-	err = chronCli.Set("latest-conditions", bytes, 0).Err()
+	err = cli.Set("latest-conditions", bytes, 0).Err()
 	if err != nil {
 		log.Printf("error setting data in redis: %+v\n", err)
 		return
@@ -113,4 +117,30 @@ type additionalData struct {
 	webCamUrl     string
 	forecastUrl   string
 	googleMapsUrl string
+}
+
+func scrape(url string) (float64, float64, float64) {
+	var fc []float64
+	c := colly.NewCollector()
+	c.OnRequest(func(r *colly.Request) {
+		fmt.Printf("scraping %s\n", url)
+	})
+
+	c.OnHTML(".snow-amount", func(h *colly.HTMLElement) {
+		snowfall, err := strconv.ParseFloat(h.Text, 32)
+		if err != nil {
+			snowfall = 0
+		}
+		fc = append(fc, snowfall)
+	})
+	c.Visit(url)
+
+	return sum(fc[:3]), sum(fc[:9]), sum(fc)
+}
+
+func sum(arr []float64) (ret float64) {
+	for _, a := range arr {
+		ret += a
+	}
+	return
 }
